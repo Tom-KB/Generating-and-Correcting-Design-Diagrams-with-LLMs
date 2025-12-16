@@ -17,7 +17,7 @@ load_dotenv()
 
 # Get only the part that matters from the LLM output
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))          
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))          # .../src/single_agent
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
 DOTENV_PATH = os.path.join(PROJECT_ROOT, ".env")
@@ -79,6 +79,16 @@ def render_success(puml_path: str, fmt: str = "png") -> bool:
     except Exception:
         return False
 
+
+# ---------------- RQ1 Metrics (Gold Standard) ----------------
+# We keep this parser intentionally simple + robust for class diagrams.
+# It works best if your ground truth uses "class X" lines and relationship lines like:
+# A "1" -- "0..*" B : label
+# A <|-- B
+# A *-- B
+#
+# If you later adopt more PlantUML features, we can upgrade the parser.
+
 REL_TYPE_MAP = {
     "<|--": "inheritance",
     "--|>": "inheritance",
@@ -94,10 +104,11 @@ REL_TYPE_MAP = {
     "--": "association",
 }
 
-Relation = Tuple[str, str, str]  
-Multiplicity = Tuple[str, str, str, str, str]  
+Relation = Tuple[str, str, str]  # (A, B, type)
+Multiplicity = Tuple[str, str, str, str, str]  # (A, B, type, multA, multB)
 
 def _normalize_name(name: str) -> str:
+    # remove quotes and trim
     return name.strip().strip('"').strip()
 
 def _ordered_pair(a: str, b: str) -> Tuple[str, str]:
@@ -106,17 +117,18 @@ def _ordered_pair(a: str, b: str) -> Tuple[str, str]:
 def extract_classes(puml: str) -> Set[str]:
     classes = set()
 
+    # class Foo { ... }
     for m in re.finditer(r'^\s*class\s+([A-Za-z_]\w*)', puml, flags=re.MULTILINE):
         classes.add(m.group(1))
 
- 
+    # also catch "abstract class", "interface" if present
     for m in re.finditer(r'^\s*(?:abstract\s+class|interface)\s+([A-Za-z_]\w*)', puml, flags=re.MULTILINE):
         classes.add(m.group(1))
 
     return classes
 
 def detect_relation_type(line: str) -> str:
- 
+    # find the first connector token in line
     for token, rtype in REL_TYPE_MAP.items():
         if token in line:
             return rtype
@@ -126,16 +138,22 @@ def extract_relations_and_multiplicities(puml: str) -> Tuple[Set[Relation], Set[
     relations: Set[Relation] = set()
     multiplicities: Set[Multiplicity] = set()
 
+    # Relationship line heuristic:
+    # Start with an identifier, contain connector tokens
     for raw in puml.splitlines():
         line = raw.strip()
         if not line or line.startswith("'") or line.startswith("//"):
             continue
+        # ignore directives
         if line.startswith("@") or line.lower().startswith("skinparam") or line.lower().startswith("hide"):
             continue
 
+        # must contain a relationship token
         if not any(tok in line for tok in REL_TYPE_MAP.keys()):
             continue
 
+        # A "1" -- "0..*" B : label
+        # Capture: left class, left mult (optional), connector (any), right mult (optional), right class
         m = re.search(
             r'^([A-Za-z_]\w*)\s*(?:"([^"]+)")?\s*([.<|*o-]{2,4}|--|\.{2}>|<\.{2})\s*(?:"([^"]+)")?\s*([A-Za-z_]\w*)',
             line
@@ -144,16 +162,18 @@ def extract_relations_and_multiplicities(puml: str) -> Tuple[Set[Relation], Set[
             continue
 
         a = _normalize_name(m.group(1))
-        mult_a = m.group(2)  
+        mult_a = m.group(2)  # may be None
         connector = m.group(3)
-        mult_b = m.group(4)  
+        mult_b = m.group(4)  # may be None
         b = _normalize_name(m.group(5))
 
         rtype = detect_relation_type(connector)
 
+        # normalize undirected for association/aggregation/composition; keep directed types but still normalize pair
         x, y = _ordered_pair(a, b)
         relations.add((x, y, rtype))
 
+        # multiplicity: only count if at least one side has explicit multiplicity
         if mult_a is not None or mult_b is not None:
             multiplicities.add((x, y, rtype, mult_a or "", mult_b or ""))
 
@@ -172,16 +192,20 @@ def compute_rq1_metrics(generated_puml: str, ground_truth_puml: str) -> Dict[str
     gen_rel, gen_mult = extract_relations_and_multiplicities(generated_puml)
     gt_rel, gt_mult = extract_relations_and_multiplicities(ground_truth_puml)
 
+    # Classes PRF1
     tp_c = len(gen_classes & gt_classes)
     fp_c = len(gen_classes - gt_classes)
     fn_c = len(gt_classes - gen_classes)
     class_scores = prf1(tp_c, fp_c, fn_c)
 
+    # Relations PRF1
     tp_r = len(gen_rel & gt_rel)
     fp_r = len(gen_rel - gt_rel)
     fn_r = len(gt_rel - gen_rel)
     rel_scores = prf1(tp_r, fp_r, fn_r)
 
+    # Multiplicity accuracy: evaluate only GT multiplicities (expected)
+    # exact match on (pair, type, multA, multB) after normalization
     mult_acc = (len(gen_mult & gt_mult) / len(gt_mult)) if len(gt_mult) > 0 else 0.0
 
     return {
@@ -260,6 +284,7 @@ def generate_and_evaluate(requirements: str) -> RunResult:
         temperature=0.2,
     )
 
+    # (Recomendado) usar outro modelo/config para judge
     judge = ChatOpenAI(
         model=os.getenv("OPENAI_JUDGE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
         temperature=0.0,
@@ -332,6 +357,7 @@ def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
     return rq1
 
 if __name__ == "__main__":
+    # Expecting: exercise_01.txt ... exercise_05.txt
     exercise_files = [f"exercise_{i:02d}.txt" for i in range(1, 6)]
     rows: List[Dict[str, float]] = []
 
@@ -342,7 +368,7 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Missing exercise file: {path}")
         rows.append(run_exercise(exercise_id, path))
 
-
+    # Write CSV summary
     csv_path = os.path.join(OUTPUTS_ROOT, "rq1_results.csv")
     fieldnames = [
         "exercise_id",
