@@ -1,0 +1,17 @@
+@startuml
+class Employee {
+    +id: int
+    +name: String
+}
+
+class Manager {
+    +bonus: double
+}
+
+class Developer {
+    +programmingLanguage: String
+}
+
+Employee <|-- Manager
+Employee <|-- Developer
+@enduml

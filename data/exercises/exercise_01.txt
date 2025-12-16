@@ -1,0 +1,25 @@
+# SOFTWARE_DESCRIPTION
+The system manages users and tasks.
+
+Each User has an id, a name, and an email.
+Each Task has an id, a title, and a status.
+
+A User can create multiple Tasks.
+Each Task is created by exactly one User.
+
+# GROUND_TRUTH_PLANTUML
+@startuml
+class User {
+  id
+  name
+  email
+}
+
+class Task {
+  id
+  title
+  status
+}
+
+User "1" -- "0..*" Task : creates
+@enduml

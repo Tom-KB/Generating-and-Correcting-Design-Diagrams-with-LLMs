@@ -1,0 +1,25 @@
+@startuml
+class Library {
+    +name: String
+    +address: String
+}
+
+class Book {
+    +ISBN: String
+    +title: String
+}
+
+class User {
+    +id: String
+    +name: String
+}
+
+class Borrow {
+    +borrowDate: Date
+}
+
+Library "1" -- "*" Book : contains
+User "1" -- "*" Borrow : borrows
+Book "1" -- "0..1" Borrow : is borrowed by
+
+@enduml

@@ -1,0 +1,18 @@
+@startuml
+class Student {
+    +id: int
+    +name: String
+}
+
+class Course {
+    +code: String
+    +title: String
+}
+
+class Enrollment {
+    +enrollmentDate: Date
+}
+
+Student "1" -- "0..*" Enrollment : enrolls >
+Course "1" -- "0..*" Enrollment : includes >
+@enduml

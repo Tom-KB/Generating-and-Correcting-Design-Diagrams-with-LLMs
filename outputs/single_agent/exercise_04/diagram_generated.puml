@@ -1,0 +1,14 @@
+@startuml
+class Order {
+    +id: int
+    +date: Date
+}
+
+class OrderItem {
+    +quantity: int
+    +price: float
+}
+
+Order "1" -- "*" OrderItem : contains
+OrderItem "1" --> "1" Order : belongs to
+@enduml

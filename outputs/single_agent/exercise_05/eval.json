@@ -1,0 +1,18 @@
+{
+  "syntax_ok": true,
+  "syntax_issues": [],
+  "semantic_ok": false,
+  "semantic_issues": [
+    "The Borrow class is not associated with the Library class, which is necessary to represent the borrowing context.",
+    "The Borrow class should have a direct association with the Book class to indicate which book is being borrowed.",
+    "The Borrow class should have a reference to the User class to indicate which user is borrowing the book."
+  ],
+  "pragmatic_ok": true,
+  "pragmatic_issues": [],
+  "score_0_100": 40,
+  "recommendations": [
+    "Add an association from the Borrow class to the Library class to represent the context of borrowing.",
+    "Add an association from the Borrow class to the Book class to indicate which book is being borrowed.",
+    "Add an association from the Borrow class to the User class to indicate which user is borrowing the book."
+  ]
+}

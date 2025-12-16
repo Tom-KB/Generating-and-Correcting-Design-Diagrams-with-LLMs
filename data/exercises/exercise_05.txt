@@ -1,0 +1,38 @@
+# SOFTWARE_DESCRIPTION
+The system manages a library.
+
+Each Library has a name and an address.
+A Library contains many Books.
+Each Book has an ISBN and a title.
+
+Users can borrow books.
+Each User has an id and a name.
+A User can borrow many Books, but a Book can be borrowed by only one User at a time.
+
+The system must store the borrow date.
+
+# GROUND_TRUTH_PLANTUML
+@startuml
+class Library {
+  name
+  address
+}
+
+class Book {
+  ISBN
+  title
+}
+
+class User {
+  id
+  name
+}
+
+class Borrowing {
+  borrowDate
+}
+
+Library "1" -- "0..*" Book
+User "1" -- "0..*" Borrowing
+Book "1" -- "0..1" Borrowing
+@enduml

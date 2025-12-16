@@ -1,0 +1,30 @@
+# SOFTWARE_DESCRIPTION
+The system manages students and courses.
+
+Each Student has an id and a name.
+Each Course has a code and a title.
+
+Students can enroll in multiple courses.
+Each course can have many students.
+
+The system must store the enrollment date.
+
+# GROUND_TRUTH_PLANTUML
+@startuml
+class Student {
+  id
+  name
+}
+
+class Course {
+  code
+  title
+}
+
+class Enrollment {
+  enrollmentDate
+}
+
+Student "1" -- "0..*" Enrollment
+Course "1" -- "0..*" Enrollment
+@enduml

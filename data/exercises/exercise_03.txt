@@ -1,0 +1,27 @@
+# SOFTWARE_DESCRIPTION
+The system manages employees.
+
+Each Employee has an id and a name.
+There are two types of employees: Manager and Developer.
+
+A Manager has a bonus.
+A Developer has a programmingLanguage.
+
+# GROUND_TRUTH_PLANTUML
+@startuml
+class Employee {
+  id
+  name
+}
+
+class Manager {
+  bonus
+}
+
+class Developer {
+  programmingLanguage
+}
+
+Employee <|-- Manager
+Employee <|-- Developer
+@enduml

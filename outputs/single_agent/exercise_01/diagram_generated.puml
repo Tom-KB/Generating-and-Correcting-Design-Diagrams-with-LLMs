@@ -1,0 +1,15 @@
+@startuml
+class User {
+    +id: int
+    +name: String
+    +email: String
+}
+
+class Task {
+    +id: int
+    +title: String
+    +status: String
+}
+
+User "1" -- "0..*" Task : creates >
+@enduml
