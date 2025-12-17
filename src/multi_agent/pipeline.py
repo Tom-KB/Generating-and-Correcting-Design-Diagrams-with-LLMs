@@ -1,28 +1,26 @@
-import os, re, csv, json, time
+import os
+import re
+import csv
+import json
+import subprocess
+import time
 from dataclasses import dataclass
-from typing import List, Set, Tuple, Dict
 from pathlib import Path
-import subprocess
+from typing import Dict, List, Set, Tuple
+
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.output_parsers import PydanticOutputParser
-#from langchain.output_parsers import PydanticOutputParser  # <-- CORRETO AQUI
-import subprocess
-from pathlib import Path
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
-load_dotenv()
-
-# Get only the part that matters from the LLM output
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))          # .../src/single_agent
+# Shared paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # .../src/multi_agent
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
 DOTENV_PATH = os.path.join(PROJECT_ROOT, ".env")
 EXERCISES_DIR = os.path.join(PROJECT_ROOT, "data", "exercises")
-OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs", "single_agent")
+OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs", "multi_agent")
 os.makedirs(OUTPUTS_ROOT, exist_ok=True)
 
 load_dotenv(dotenv_path=DOTENV_PATH)
@@ -41,14 +39,17 @@ def _wait_for_slot():
         time.sleep(_MIN_INTERVAL - elapsed)
     _last_call_ts = time.time()
 
+
+# ---------------- Utilities ----------------
 def extract_plantuml(text: str) -> str:
     m = re.search(r"@startuml[\s\S]*?@enduml", text)
     if not m:
         raise ValueError("No @startuml...@enduml block found.")
     return m.group(0).strip()
 
-# Identify common errors
+
 def basic_sanity_checks(puml: str) -> List[str]:
+    """Catch common formatting issues before asking the critic."""
     issues = []
     if "@startuml" not in puml or "@enduml" not in puml:
         issues.append("Missing @startuml/@enduml.")
@@ -59,7 +60,7 @@ def basic_sanity_checks(puml: str) -> List[str]:
     return issues
 
 
-def parse_exercise(path: str):
+def parse_exercise(path: str) -> Tuple[str, str]:
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
 
@@ -72,19 +73,16 @@ def parse_exercise(path: str):
     diagram_groundtruth = text.split("# GROUND_TRUTH_PLANTUML", 1)[1].strip()
     return sw_description, diagram_groundtruth
 
+
 def render_plantuml(puml_path: str, fmt: str = "png") -> Path:
-    """
-    Renders a .puml file into an image using local PlantUML CLI.
-    fmt: 'png' or 'svg' (svg is great for papers).
-    """
     p = Path(puml_path)
     if not p.exists():
         raise FileNotFoundError(f"PlantUML file not found: {p}")
 
     cmd = ["plantuml", f"-t{fmt}", str(p)]
     subprocess.run(cmd, check=True)
-
     return p.with_suffix(f".{fmt}")
+
 
 def render_success(puml_path: str, fmt: str = "png") -> bool:
     try:
@@ -94,15 +92,7 @@ def render_success(puml_path: str, fmt: str = "png") -> bool:
         return False
 
 
-# ---------------- RQ1 Metrics (Gold Standard) ----------------
-# We keep this parser intentionally simple + robust for class diagrams.
-# It works best if your ground truth uses "class X" lines and relationship lines like:
-# A "1" -- "0..*" B : label
-# A <|-- B
-# A *-- B
-#
-# If you later adopt more PlantUML features, we can upgrade the parser.
-
+# ---------------- RQ2 Metrics ----------------
 REL_TYPE_MAP = {
     "<|--": "inheritance",
     "--|>": "inheritance",
@@ -121,77 +111,66 @@ REL_TYPE_MAP = {
 Relation = Tuple[str, str, str]  # (A, B, type)
 Multiplicity = Tuple[str, str, str, str, str]  # (A, B, type, multA, multB)
 
+
 def _normalize_name(name: str) -> str:
-    # remove quotes and trim
     return name.strip().strip('"').strip()
+
 
 def _ordered_pair(a: str, b: str) -> Tuple[str, str]:
     return (a, b) if a.lower() <= b.lower() else (b, a)
 
+
 def extract_classes(puml: str) -> Set[str]:
     classes = set()
-
-    # class Foo { ... }
-    for m in re.finditer(r'^\s*class\s+([A-Za-z_]\w*)', puml, flags=re.MULTILINE):
+    for m in re.finditer(r"^\s*class\s+([A-Za-z_]\w*)", puml, flags=re.MULTILINE):
         classes.add(m.group(1))
-
-    # also catch "abstract class", "interface" if present
-    for m in re.finditer(r'^\s*(?:abstract\s+class|interface)\s+([A-Za-z_]\w*)', puml, flags=re.MULTILINE):
+    for m in re.finditer(r"^\s*(?:abstract\s+class|interface)\s+([A-Za-z_]\w*)", puml, flags=re.MULTILINE):
         classes.add(m.group(1))
-
     return classes
 
+
 def detect_relation_type(line: str) -> str:
-    # find the first connector token in line
     for token, rtype in REL_TYPE_MAP.items():
         if token in line:
             return rtype
     return "association"
 
+
 def extract_relations_and_multiplicities(puml: str) -> Tuple[Set[Relation], Set[Multiplicity]]:
     relations: Set[Relation] = set()
     multiplicities: Set[Multiplicity] = set()
 
-    # Relationship line heuristic:
-    # Start with an identifier, contain connector tokens
     for raw in puml.splitlines():
         line = raw.strip()
         if not line or line.startswith("'") or line.startswith("//"):
             continue
-        # ignore directives
         if line.startswith("@") or line.lower().startswith("skinparam") or line.lower().startswith("hide"):
             continue
-
-        # must contain a relationship token
         if not any(tok in line for tok in REL_TYPE_MAP.keys()):
             continue
 
-        # A "1" -- "0..*" B : label
-        # Capture: left class, left mult (optional), connector (any), right mult (optional), right class
         m = re.search(
             r'^([A-Za-z_]\w*)\s*(?:"([^"]+)")?\s*([.<|*o-]{2,4}|--|\.{2}>|<\.{2})\s*(?:"([^"]+)")?\s*([A-Za-z_]\w*)',
-            line
+            line,
         )
         if not m:
             continue
 
         a = _normalize_name(m.group(1))
-        mult_a = m.group(2)  # may be None
+        mult_a = m.group(2)
         connector = m.group(3)
-        mult_b = m.group(4)  # may be None
+        mult_b = m.group(4)
         b = _normalize_name(m.group(5))
 
         rtype = detect_relation_type(connector)
-
-        # normalize undirected for association/aggregation/composition; keep directed types but still normalize pair
         x, y = _ordered_pair(a, b)
         relations.add((x, y, rtype))
 
-        # multiplicity: only count if at least one side has explicit multiplicity
         if mult_a is not None or mult_b is not None:
             multiplicities.add((x, y, rtype, mult_a or "", mult_b or ""))
 
     return relations, multiplicities
+
 
 def prf1(tp: int, fp: int, fn: int) -> Dict[str, float]:
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
@@ -199,27 +178,24 @@ def prf1(tp: int, fp: int, fn: int) -> Dict[str, float]:
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
     return {"precision": precision, "recall": recall, "f1": f1}
 
-def compute_rq1_metrics(generated_puml: str, ground_truth_puml: str) -> Dict[str, float]:
+
+def compute_rq2_metrics(generated_puml: str, ground_truth_puml: str) -> Dict[str, float]:
     gen_classes = extract_classes(generated_puml)
     gt_classes = extract_classes(ground_truth_puml)
 
     gen_rel, gen_mult = extract_relations_and_multiplicities(generated_puml)
     gt_rel, gt_mult = extract_relations_and_multiplicities(ground_truth_puml)
 
-    # Classes PRF1
     tp_c = len(gen_classes & gt_classes)
     fp_c = len(gen_classes - gt_classes)
     fn_c = len(gt_classes - gen_classes)
     class_scores = prf1(tp_c, fp_c, fn_c)
 
-    # Relations PRF1
     tp_r = len(gen_rel & gt_rel)
     fp_r = len(gen_rel - gt_rel)
     fn_r = len(gt_rel - gen_rel)
     rel_scores = prf1(tp_r, fp_r, fn_r)
 
-    # Multiplicity accuracy: evaluate only GT multiplicities (expected)
-    # exact match on (pair, type, multA, multB) after normalization
     mult_acc = (len(gen_mult & gt_mult) / len(gt_mult)) if len(gt_mult) > 0 else 0.0
 
     return {
@@ -237,6 +213,8 @@ def compute_rq1_metrics(generated_puml: str, ground_truth_puml: str) -> Dict[str
         "n_multiplicities_gt": float(len(gt_mult)),
     }
 
+
+# ---------------- Prompts & Roles ----------------
 GEN_PROMPT = """\
 You are a UML modeling assistant.
 Generate a UML Class Diagram in PlantUML for the system below.
@@ -248,6 +226,45 @@ Output rules:
 
 System description:
 {requirements}
+"""
+
+CRITIC_PROMPT = """\
+You are a strict UML reviewer.
+Check the candidate PlantUML against the requirements and the sanity issues.
+
+Requirements:
+{requirements}
+
+Candidate PlantUML:
+{plantuml}
+
+Sanity-check issues to consider:
+{sanity_issues}
+
+Return a JSON object matching exactly this schema:
+{format_instructions}
+
+Be concrete and actionable."""
+
+FIX_PROMPT = """\
+You are a UML fixer.
+Given the requirements, a flawed PlantUML diagram, and the critique issues,
+produce a corrected PlantUML.
+
+Rules:
+- Output ONLY valid PlantUML code.
+- Must include @startuml and @enduml.
+- No Markdown fences.
+- Apply the recommendations; keep existing correct content where possible.
+
+Requirements:
+{requirements}
+
+Original PlantUML:
+{plantuml}
+
+Critique issues:
+{critique}
 """
 
 EVAL_PROMPT = """\
@@ -272,108 +289,156 @@ Rules:
 - If something is missing from requirements, call it out.
 """
 
+
+class Critique(BaseModel):
+    issues: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+    score_0_100: int = Field(..., ge=0, le=100)
+
+
 class EvalResult(BaseModel):
     syntax_ok: bool = Field(..., description="Is the PlantUML syntactically plausible?")
     syntax_issues: List[str] = Field(default_factory=list)
-
     semantic_ok: bool = Field(..., description="Does it represent the requirements correctly?")
     semantic_issues: List[str] = Field(default_factory=list)
-
     pragmatic_ok: bool = Field(..., description="Is it clear/readable/well-structured?")
     pragmatic_issues: List[str] = Field(default_factory=list)
-
     score_0_100: int = Field(..., ge=0, le=100, description="Overall quality score.")
     recommendations: List[str] = Field(default_factory=list, description="Concrete fixes to improve the diagram.")
 
+
 @dataclass
 class RunResult:
-    plantuml: str
+    plantuml_generated: str
+    plantuml_fixed: str
+    critique: Critique
     evaluation: EvalResult
     raw_generation: str
+    raw_critique: str
+    raw_fix: str
     raw_evaluation: str
 
-def generate_and_evaluate(requirements: str) -> RunResult:
+
+# ---------------- Pipeline Steps ----------------
+def make_model(role: str, temperature: float) -> ChatOpenAI:
+    return ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=temperature)
+
+
+def generate(requirements: str) -> Tuple[str, str]:
     _wait_for_slot()
-    generator = ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        temperature=0.2,
-    )
-
-    # (Recomendado) usar outro modelo/config para judge
-    judge = ChatOpenAI(
-        model=os.getenv("OPENAI_JUDGE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
-        temperature=0.0,
-    )
-
+    generator = make_model("generator", temperature=0.2)
     gen_chain = ChatPromptTemplate.from_template(GEN_PROMPT) | generator | StrOutputParser()
     raw_gen = gen_chain.invoke({"requirements": requirements})
-    puml = extract_plantuml(raw_gen)
+    return extract_plantuml(raw_gen), raw_gen
 
-    sanity = basic_sanity_checks(puml)
+
+def critique(requirements: str, plantuml: str) -> Tuple[Critique, str]:
+    _wait_for_slot()
+    critic = make_model("critic", temperature=0.0)
+    sanity = basic_sanity_checks(plantuml)
     sanity_text = "None" if not sanity else "\n".join(f"- {x}" for x in sanity)
+    parser = PydanticOutputParser(pydantic_object=Critique)
+    prompt = ChatPromptTemplate.from_template(CRITIC_PROMPT).partial(
+        format_instructions=parser.get_format_instructions()
+    )
+    chain = prompt | critic | StrOutputParser()
+    raw = chain.invoke({"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text})
+    return parser.parse(raw), raw
 
+
+def fix(requirements: str, plantuml: str, critique: Critique) -> Tuple[str, str]:
+    _wait_for_slot()
+    fixer = make_model("fixer", temperature=0.2)
+    prompt = ChatPromptTemplate.from_template(FIX_PROMPT)
+    chain = prompt | fixer | StrOutputParser()
+    critique_text = "\n".join([f"- {i}" for i in critique.issues] + [f"Recommendation: {r}" for r in critique.recommendations]) or "None"
+    raw = chain.invoke({"requirements": requirements, "plantuml": plantuml, "critique": critique_text})
+    return extract_plantuml(raw), raw
+
+
+def evaluate(requirements: str, plantuml: str) -> Tuple[EvalResult, str]:
+    _wait_for_slot()
+    judge = make_model("judge", temperature=0.0)
+    sanity = basic_sanity_checks(plantuml)
+    sanity_text = "None" if not sanity else "\n".join(f"- {x}" for x in sanity)
     parser = PydanticOutputParser(pydantic_object=EvalResult)
     eval_prompt = ChatPromptTemplate.from_template(EVAL_PROMPT).partial(
         format_instructions=parser.get_format_instructions()
     )
     eval_chain = eval_prompt | judge | StrOutputParser()
+    raw_eval = eval_chain.invoke({"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text})
+    return parser.parse(raw_eval), raw_eval
 
-    _wait_for_slot()
-    raw_eval = eval_chain.invoke({
-        "requirements": requirements,
-        "plantuml": puml,
-        "sanity_issues": sanity_text
-    })
 
-    evaluation = parser.parse(raw_eval)
+def generate_and_evaluate(requirements: str) -> RunResult:
+    puml_gen, raw_gen = generate(requirements)
+    critique_result, raw_critique = critique(requirements, puml_gen)
+    puml_fixed, raw_fix = fix(requirements, puml_gen, critique_result)
+    evaluation, raw_eval = evaluate(requirements, puml_fixed)
 
     return RunResult(
-        plantuml=puml,
+        plantuml_generated=puml_gen,
+        plantuml_fixed=puml_fixed,
+        critique=critique_result,
         evaluation=evaluation,
         raw_generation=raw_gen,
+        raw_critique=raw_critique,
+        raw_fix=raw_fix,
         raw_evaluation=raw_eval,
     )
 
+
+# ---------------- Runner ----------------
 def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
-    """Runs one exercise end-to-end and returns a flat dict for CSV."""
     requirements_text, ground_truth = parse_exercise(exercise_path)
     result = generate_and_evaluate(requirements_text)
+    eval_generated, raw_eval_gen = evaluate(requirements_text, result.plantuml_generated)
+
 
     out_dir = os.path.join(OUTPUTS_ROOT, exercise_id)
     os.makedirs(out_dir, exist_ok=True)
 
-    generated_puml_path = os.path.join(out_dir, "diagram_generated.puml")
+    gen_puml_path = os.path.join(out_dir, "diagram_generated.puml")
+    fixed_puml_path = os.path.join(out_dir, "diagram_fixed.puml")
     gt_puml_path = os.path.join(out_dir, "diagram_ground_truth.puml")
-    eval_path = os.path.join(out_dir, "eval.json")
+    critique_path = os.path.join(out_dir, "critique.json")
+    eval_gen_path = os.path.join(out_dir, "eval_generated.json")
+    eval_fix_path = os.path.join(out_dir, "eval_fixed.json")
 
-    with open(generated_puml_path, "w", encoding="utf-8") as f:
-        f.write(result.plantuml)
-
+    with open(gen_puml_path, "w", encoding="utf-8") as f:
+        f.write(result.plantuml_generated)
+    with open(fixed_puml_path, "w", encoding="utf-8") as f:
+        f.write(result.plantuml_fixed)
     with open(gt_puml_path, "w", encoding="utf-8") as f:
         f.write(ground_truth)
-
-    with open(eval_path, "w", encoding="utf-8") as f:
+    with open(critique_path, "w", encoding="utf-8") as f:
+        f.write(result.critique.model_dump_json(indent=2))
+    with open(eval_gen_path, "w", encoding="utf-8") as f:
+        f.write(eval_generated.model_dump_json(indent=2))
+    with open(eval_fix_path, "w", encoding="utf-8") as f:
         f.write(result.evaluation.model_dump_json(indent=2))
 
-    gen_render_ok = render_success(generated_puml_path, fmt="png")
+    gen_render_ok = render_success(gen_puml_path, fmt="png")
+    fixed_render_ok = render_success(fixed_puml_path, fmt="png")
     gt_render_ok = render_success(gt_puml_path, fmt="png")
 
-    rq1 = compute_rq1_metrics(result.plantuml, ground_truth)
-    rq1["render_success_generated"] = 1.0 if gen_render_ok else 0.0
-    rq1["render_success_ground_truth"] = 1.0 if gt_render_ok else 0.0
+    rq2 = compute_rq2_metrics(result.plantuml_fixed, ground_truth)
+    rq2["render_success_generated"] = 1.0 if gen_render_ok else 0.0
+    rq2["render_success_fixed"] = 1.0 if fixed_render_ok else 0.0
+    rq2["render_success_ground_truth"] = 1.0 if gt_render_ok else 0.0
+    rq2["exercise_id"] = exercise_id
+    rq2["judge_score_0_100"] = float(result.evaluation.score_0_100)
+    rq2["critic_score_0_100"] = float(result.critique.score_0_100)
 
-    rq1["exercise_id"] = exercise_id
-    rq1["judge_score_0_100"] = float(result.evaluation.score_0_100)
-
-    metrics_path = os.path.join(out_dir, "rq1_metrics.json")
+    metrics_path = os.path.join(out_dir, "rq2_metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(rq1, f, indent=2)
+        json.dump(rq2, f, indent=2)
 
-    print(f"[{exercise_id}] Saved outputs to: {out_dir}")
-    return rq1
+    print(out_dir)
+    return rq2
 
-if __name__ == "__main__":
-    # Expecting: exercise_01.txt ... exercise_05.txt
+
+def main():
     exercise_files = [f"exercise_{i:02d}.txt" for i in range(1, 6)]
     rows: List[Dict[str, float]] = []
 
@@ -384,18 +449,27 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Missing exercise file: {path}")
         rows.append(run_exercise(exercise_id, path))
 
-    # Write CSV summary
-    csv_path = os.path.join(OUTPUTS_ROOT, "rq1_results.csv")
+    csv_path = os.path.join(OUTPUTS_ROOT, "rq2_results.csv")
     fieldnames = [
         "exercise_id",
         "judge_score_0_100",
+        "critic_score_0_100",
         "render_success_generated",
+        "render_success_fixed",
+        "render_success_selected",
         "render_success_ground_truth",
-        "class_precision", "class_recall", "class_f1",
-        "relation_precision", "relation_recall", "relation_f1",
+        "selected_source",
+        "class_precision",
+        "class_recall",
+        "class_f1",
+        "relation_precision",
+        "relation_recall",
+        "relation_f1",
         "multiplicity_accuracy",
-        "n_classes_gen", "n_classes_gt",
-        "n_relations_gen", "n_relations_gt",
+        "n_classes_gen",
+        "n_classes_gt",
+        "n_relations_gen",
+        "n_relations_gt",
         "n_multiplicities_gt",
     ]
 
@@ -406,3 +480,7 @@ if __name__ == "__main__":
             writer.writerow({k: r.get(k, "") for k in fieldnames})
 
     print("\nSaved CSV:", csv_path)
+
+
+if __name__ == "__main__":
+    main()
