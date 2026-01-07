@@ -1,4 +1,4 @@
-import os, re, csv, json, time
+import os, re, csv, json, time, threading
 from dataclasses import dataclass
 from typing import List, Set, Tuple, Dict
 from pathlib import Path
@@ -29,17 +29,50 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 
 # Simple per-process throttle to avoid 429 rate limits on free/low-RPM accounts.
 _OPENAI_RPM = int(os.getenv("OPENAI_RPM", "3"))
-_MIN_INTERVAL = 60.0 / max(_OPENAI_RPM, 1)
-_last_call_ts = 0.0
+_RPM_BUFFER_SEC = float(os.getenv("OPENAI_RPM_BUFFER_SEC", "2.0"))
+_MIN_INTERVAL = (60.0 / max(_OPENAI_RPM, 1)) + max(_RPM_BUFFER_SEC, 0.0)
+_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+_LOCK = threading.Lock()
+_last_call_ts = 0.0  # timestamp of last completed API call (this process)
 
 
 def _wait_for_slot():
+    wait_for = (_last_call_ts + _MIN_INTERVAL) - time.time()
+    if wait_for > 0:
+        time.sleep(wait_for)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__
+    if name == "RateLimitError":
+        return True
+    msg = str(exc).lower()
+    return ("429" in msg and "rate limit" in msg) or ("rate_limit_exceeded" in msg)
+
+
+def _invoke_chain(chain, inputs: Dict[str, str]) -> str:
     global _last_call_ts
-    now = time.time()
-    elapsed = now - _last_call_ts
-    if elapsed < _MIN_INTERVAL:
-        time.sleep(_MIN_INTERVAL - elapsed)
-    _last_call_ts = time.time()
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            with _LOCK:
+                _wait_for_slot()
+                result = chain.invoke(inputs)
+                _last_call_ts = time.time()
+                return result
+        except Exception as e:
+            if not _is_rate_limit_error(e) or attempt >= _MAX_RETRIES:
+                raise
+
+            msg = str(e)
+            retry_after = None
+            m = re.search(r"try again in\\s+(\\d+)s", msg, flags=re.IGNORECASE)
+            if m:
+                try:
+                    retry_after = float(m.group(1))
+                except Exception:
+                    retry_after = None
+            time.sleep(retry_after if retry_after is not None else _MIN_INTERVAL)
 
 def extract_plantuml(text: str) -> str:
     m = re.search(r"@startuml[\s\S]*?@enduml", text)
@@ -293,7 +326,6 @@ class RunResult:
     raw_evaluation: str
 
 def generate_and_evaluate(requirements: str) -> RunResult:
-    _wait_for_slot()
     generator = ChatOpenAI(
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=0.2,
@@ -306,7 +338,7 @@ def generate_and_evaluate(requirements: str) -> RunResult:
     )
 
     gen_chain = ChatPromptTemplate.from_template(GEN_PROMPT) | generator | StrOutputParser()
-    raw_gen = gen_chain.invoke({"requirements": requirements})
+    raw_gen = _invoke_chain(gen_chain, {"requirements": requirements})
     puml = extract_plantuml(raw_gen)
 
     sanity = basic_sanity_checks(puml)
@@ -318,12 +350,10 @@ def generate_and_evaluate(requirements: str) -> RunResult:
     )
     eval_chain = eval_prompt | judge | StrOutputParser()
 
-    _wait_for_slot()
-    raw_eval = eval_chain.invoke({
-        "requirements": requirements,
-        "plantuml": puml,
-        "sanity_issues": sanity_text
-    })
+    raw_eval = _invoke_chain(
+        eval_chain,
+        {"requirements": requirements, "plantuml": puml, "sanity_issues": sanity_text},
+    )
 
     evaluation = parser.parse(raw_eval)
 

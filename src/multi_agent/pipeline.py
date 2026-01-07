@@ -4,6 +4,7 @@ import csv
 import json
 import subprocess
 import time
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -20,24 +21,63 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
 DOTENV_PATH = os.path.join(PROJECT_ROOT, ".env")
 EXERCISES_DIR = os.path.join(PROJECT_ROOT, "data", "exercises")
-OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs", "multi_agent")
+# OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs", "multi_agent")
+OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs", "multi_agent_2nd")
 os.makedirs(OUTPUTS_ROOT, exist_ok=True)
 
 load_dotenv(dotenv_path=DOTENV_PATH)
 
 # Simple per-process throttle to avoid 429 rate limits on free/low-RPM accounts.
 _OPENAI_RPM = int(os.getenv("OPENAI_RPM", "3"))
-_MIN_INTERVAL = 60.0 / max(_OPENAI_RPM, 1)
-_last_call_ts = 0.0
+_RPM_BUFFER_SEC = float(os.getenv("OPENAI_RPM_BUFFER_SEC", "2.0"))
+_MIN_INTERVAL = (60.0 / max(_OPENAI_RPM, 1)) + max(_RPM_BUFFER_SEC, 0.0)
+_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+_LOCK = threading.Lock()
+_last_call_ts = 0.0  # timestamp of last completed API call (this process)
+
+# Multi-agent behavior tuning (defaults chosen to be conservative).
+_FIX_TEMPERATURE = float(os.getenv("MULTI_AGENT_FIX_TEMPERATURE", "0.0"))
+_SKIP_FIX_CRITIC_SCORE_GE = int(os.getenv("MULTI_AGENT_SKIP_FIX_CRITIC_SCORE_GE", "90"))
+_MIN_JUDGE_IMPROVEMENT = float(os.getenv("MULTI_AGENT_MIN_JUDGE_IMPROVEMENT", "1.0"))
 
 
 def _wait_for_slot():
+    wait_for = (_last_call_ts + _MIN_INTERVAL) - time.time()
+    if wait_for > 0:
+        time.sleep(wait_for)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__
+    if name == "RateLimitError":
+        return True
+    msg = str(exc).lower()
+    return ("429" in msg and "rate limit" in msg) or ("rate_limit_exceeded" in msg)
+
+
+def _invoke_chain(chain, inputs: Dict[str, str]) -> str:
     global _last_call_ts
-    now = time.time()
-    elapsed = now - _last_call_ts
-    if elapsed < _MIN_INTERVAL:
-        time.sleep(_MIN_INTERVAL - elapsed)
-    _last_call_ts = time.time()
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            with _LOCK:
+                _wait_for_slot()
+                result = chain.invoke(inputs)
+                _last_call_ts = time.time()
+                return result
+        except Exception as e:
+            if not _is_rate_limit_error(e) or attempt >= _MAX_RETRIES:
+                raise
+
+            msg = str(e)
+            retry_after = None
+            m = re.search(r"try again in\\s+(\\d+)s", msg, flags=re.IGNORECASE)
+            if m:
+                try:
+                    retry_after = float(m.group(1))
+                except Exception:
+                    retry_after = None
+            time.sleep(retry_after if retry_after is not None else _MIN_INTERVAL)
 
 
 # ---------------- Utilities ----------------
@@ -255,7 +295,12 @@ Rules:
 - Output ONLY valid PlantUML code.
 - Must include @startuml and @enduml.
 - No Markdown fences.
-- Apply the recommendations; keep existing correct content where possible.
+- Make the smallest set of changes needed to address the critique.
+- Preserve existing correct content, names, and structure as much as possible.
+- Do NOT add new classes/relations unless explicitly required by the requirements.
+- Do NOT remove existing classes/relations unless they are clearly wrong per the requirements.
+- If the critique is low-confidence or ambiguous, prefer leaving the original unchanged.
+- If no changes are needed, output the original PlantUML unchanged.
 
 Requirements:
 {requirements}
@@ -311,12 +356,19 @@ class EvalResult(BaseModel):
 class RunResult:
     plantuml_generated: str
     plantuml_fixed: str
+    plantuml_selected: str
     critique: Critique
-    evaluation: EvalResult
+    evaluation_generated: EvalResult
+    evaluation_fixed: EvalResult
+    evaluation_selected: EvalResult
+    selected_source: str
+    fix_attempted: bool
     raw_generation: str
     raw_critique: str
     raw_fix: str
-    raw_evaluation: str
+    raw_evaluation_generated: str
+    raw_evaluation_fixed: str
+    raw_evaluation_selected: str
 
 
 # ---------------- Pipeline Steps ----------------
@@ -325,15 +377,13 @@ def make_model(role: str, temperature: float) -> ChatOpenAI:
 
 
 def generate(requirements: str) -> Tuple[str, str]:
-    _wait_for_slot()
     generator = make_model("generator", temperature=0.2)
     gen_chain = ChatPromptTemplate.from_template(GEN_PROMPT) | generator | StrOutputParser()
-    raw_gen = gen_chain.invoke({"requirements": requirements})
+    raw_gen = _invoke_chain(gen_chain, {"requirements": requirements})
     return extract_plantuml(raw_gen), raw_gen
 
 
 def critique(requirements: str, plantuml: str) -> Tuple[Critique, str]:
-    _wait_for_slot()
     critic = make_model("critic", temperature=0.0)
     sanity = basic_sanity_checks(plantuml)
     sanity_text = "None" if not sanity else "\n".join(f"- {x}" for x in sanity)
@@ -342,22 +392,20 @@ def critique(requirements: str, plantuml: str) -> Tuple[Critique, str]:
         format_instructions=parser.get_format_instructions()
     )
     chain = prompt | critic | StrOutputParser()
-    raw = chain.invoke({"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text})
+    raw = _invoke_chain(chain, {"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text})
     return parser.parse(raw), raw
 
 
 def fix(requirements: str, plantuml: str, critique: Critique) -> Tuple[str, str]:
-    _wait_for_slot()
-    fixer = make_model("fixer", temperature=0.2)
+    fixer = make_model("fixer", temperature=_FIX_TEMPERATURE)
     prompt = ChatPromptTemplate.from_template(FIX_PROMPT)
     chain = prompt | fixer | StrOutputParser()
     critique_text = "\n".join([f"- {i}" for i in critique.issues] + [f"Recommendation: {r}" for r in critique.recommendations]) or "None"
-    raw = chain.invoke({"requirements": requirements, "plantuml": plantuml, "critique": critique_text})
+    raw = _invoke_chain(chain, {"requirements": requirements, "plantuml": plantuml, "critique": critique_text})
     return extract_plantuml(raw), raw
 
 
 def evaluate(requirements: str, plantuml: str) -> Tuple[EvalResult, str]:
-    _wait_for_slot()
     judge = make_model("judge", temperature=0.0)
     sanity = basic_sanity_checks(plantuml)
     sanity_text = "None" if not sanity else "\n".join(f"- {x}" for x in sanity)
@@ -366,33 +414,72 @@ def evaluate(requirements: str, plantuml: str) -> Tuple[EvalResult, str]:
         format_instructions=parser.get_format_instructions()
     )
     eval_chain = eval_prompt | judge | StrOutputParser()
-    raw_eval = eval_chain.invoke({"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text})
+    raw_eval = _invoke_chain(
+        eval_chain,
+        {"requirements": requirements, "plantuml": plantuml, "sanity_issues": sanity_text},
+    )
     return parser.parse(raw_eval), raw_eval
 
 
-def generate_and_evaluate(requirements: str) -> RunResult:
-    puml_gen, raw_gen = generate(requirements)
-    critique_result, raw_critique = critique(requirements, puml_gen)
-    puml_fixed, raw_fix = fix(requirements, puml_gen, critique_result)
-    evaluation, raw_eval = evaluate(requirements, puml_fixed)
+def _should_attempt_fix(critique_result: Critique, plantuml: str) -> bool:
+    sanity = basic_sanity_checks(plantuml)
+    if sanity:
+        return True
+    return critique_result.score_0_100 < _SKIP_FIX_CRITIC_SCORE_GE
 
-    return RunResult(
-        plantuml_generated=puml_gen,
-        plantuml_fixed=puml_fixed,
-        critique=critique_result,
-        evaluation=evaluation,
-        raw_generation=raw_gen,
-        raw_critique=raw_critique,
-        raw_fix=raw_fix,
-        raw_evaluation=raw_eval,
+
+def _selection_key(eval_result: EvalResult, render_ok: bool) -> Tuple[int, int, int, int, int]:
+    return (
+        1 if render_ok else 0,
+        1 if eval_result.syntax_ok else 0,
+        1 if eval_result.semantic_ok else 0,
+        1 if eval_result.pragmatic_ok else 0,
+        int(eval_result.score_0_100),
     )
+
+
+def _select_diagram(
+    *,
+    plantuml_generated: str,
+    eval_generated: EvalResult,
+    render_ok_generated: bool,
+    plantuml_fixed: str,
+    eval_fixed: EvalResult,
+    render_ok_fixed: bool,
+) -> Tuple[str, str, EvalResult]:
+    if render_ok_generated and not render_ok_fixed:
+        return "generated", plantuml_generated, eval_generated
+    if render_ok_fixed and not render_ok_generated:
+        return "fixed", plantuml_fixed, eval_fixed
+
+    if plantuml_fixed.strip() == plantuml_generated.strip():
+        return "generated", plantuml_generated, eval_generated
+
+    key_gen = _selection_key(eval_generated, render_ok_generated)
+    key_fix = _selection_key(eval_fixed, render_ok_fixed)
+    if key_fix > key_gen and (eval_fixed.score_0_100 >= eval_generated.score_0_100 + _MIN_JUDGE_IMPROVEMENT):
+        return "fixed", plantuml_fixed, eval_fixed
+
+    return "generated", plantuml_generated, eval_generated
 
 
 # ---------------- Runner ----------------
 def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
     requirements_text, ground_truth = parse_exercise(exercise_path)
-    result = generate_and_evaluate(requirements_text)
-    eval_generated, raw_eval_gen = evaluate(requirements_text, result.plantuml_generated)
+    puml_gen, raw_gen = generate(requirements_text)
+    critique_result, raw_critique = critique(requirements_text, puml_gen)
+
+    fix_attempted = _should_attempt_fix(critique_result, puml_gen)
+    if fix_attempted:
+        puml_fixed, raw_fix = fix(requirements_text, puml_gen, critique_result)
+    else:
+        puml_fixed, raw_fix = puml_gen, ""
+
+    eval_generated, raw_eval_gen = evaluate(requirements_text, puml_gen)
+    if puml_fixed.strip() == puml_gen.strip():
+        eval_fixed, raw_eval_fix = eval_generated, raw_eval_gen
+    else:
+        eval_fixed, raw_eval_fix = evaluate(requirements_text, puml_fixed)
 
 
     out_dir = os.path.join(OUTPUTS_ROOT, exercise_id)
@@ -400,35 +487,75 @@ def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
 
     gen_puml_path = os.path.join(out_dir, "diagram_generated.puml")
     fixed_puml_path = os.path.join(out_dir, "diagram_fixed.puml")
+    selected_puml_path = os.path.join(out_dir, "diagram_selected.puml")
     gt_puml_path = os.path.join(out_dir, "diagram_ground_truth.puml")
     critique_path = os.path.join(out_dir, "critique.json")
     eval_gen_path = os.path.join(out_dir, "eval_generated.json")
     eval_fix_path = os.path.join(out_dir, "eval_fixed.json")
+    eval_sel_path = os.path.join(out_dir, "eval_selected.json")
+    selection_path = os.path.join(out_dir, "selection.json")
 
     with open(gen_puml_path, "w", encoding="utf-8") as f:
-        f.write(result.plantuml_generated)
+        f.write(puml_gen)
     with open(fixed_puml_path, "w", encoding="utf-8") as f:
-        f.write(result.plantuml_fixed)
+        f.write(puml_fixed)
     with open(gt_puml_path, "w", encoding="utf-8") as f:
         f.write(ground_truth)
     with open(critique_path, "w", encoding="utf-8") as f:
-        f.write(result.critique.model_dump_json(indent=2))
+        f.write(critique_result.model_dump_json(indent=2))
     with open(eval_gen_path, "w", encoding="utf-8") as f:
         f.write(eval_generated.model_dump_json(indent=2))
     with open(eval_fix_path, "w", encoding="utf-8") as f:
-        f.write(result.evaluation.model_dump_json(indent=2))
+        f.write(eval_fixed.model_dump_json(indent=2))
 
     gen_render_ok = render_success(gen_puml_path, fmt="png")
     fixed_render_ok = render_success(fixed_puml_path, fmt="png")
+
+    selected_source, puml_selected, eval_selected = _select_diagram(
+        plantuml_generated=puml_gen,
+        eval_generated=eval_generated,
+        render_ok_generated=gen_render_ok,
+        plantuml_fixed=puml_fixed,
+        eval_fixed=eval_fixed,
+        render_ok_fixed=fixed_render_ok,
+    )
+
+    with open(selected_puml_path, "w", encoding="utf-8") as f:
+        f.write(puml_selected)
+    with open(eval_sel_path, "w", encoding="utf-8") as f:
+        f.write(eval_selected.model_dump_json(indent=2))
+    with open(selection_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "selected_source": selected_source,
+                "fix_attempted": fix_attempted,
+                "min_judge_improvement": _MIN_JUDGE_IMPROVEMENT,
+                "judge_score_generated_0_100": eval_generated.score_0_100,
+                "judge_score_fixed_0_100": eval_fixed.score_0_100,
+                "judge_score_selected_0_100": eval_selected.score_0_100,
+                "render_ok_generated": gen_render_ok,
+                "render_ok_fixed": fixed_render_ok,
+            },
+            f,
+            indent=2,
+        )
+
+    selected_render_ok = render_success(selected_puml_path, fmt="png")
     gt_render_ok = render_success(gt_puml_path, fmt="png")
 
-    rq2 = compute_rq2_metrics(result.plantuml_fixed, ground_truth)
+    rq2 = compute_rq2_metrics(puml_selected, ground_truth)
     rq2["render_success_generated"] = 1.0 if gen_render_ok else 0.0
     rq2["render_success_fixed"] = 1.0 if fixed_render_ok else 0.0
+    rq2["render_success_selected"] = 1.0 if selected_render_ok else 0.0
     rq2["render_success_ground_truth"] = 1.0 if gt_render_ok else 0.0
     rq2["exercise_id"] = exercise_id
-    rq2["judge_score_0_100"] = float(result.evaluation.score_0_100)
-    rq2["critic_score_0_100"] = float(result.critique.score_0_100)
+    rq2["selected_source"] = selected_source
+    rq2["judge_score_0_100"] = float(eval_selected.score_0_100)
+    rq2["judge_score_generated_0_100"] = float(eval_generated.score_0_100)
+    rq2["judge_score_fixed_0_100"] = float(eval_fixed.score_0_100)
+    rq2["critic_score_0_100"] = float(critique_result.score_0_100)
+    rq2["fix_attempted"] = 1.0 if fix_attempted else 0.0
+    rq2["min_judge_improvement"] = float(_MIN_JUDGE_IMPROVEMENT)
 
     metrics_path = os.path.join(out_dir, "rq2_metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as f:
