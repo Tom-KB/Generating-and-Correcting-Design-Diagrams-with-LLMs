@@ -274,6 +274,15 @@ GEN_PROMPT = """\
 You are a UML modeling assistant.
 Generate a UML Class Diagram in PlantUML for the system below.
 
+Follow these conventions derived from the ground-truth diagrams:
+- Use only PlantUML class-diagram syntax (no Markdown or styling directives).
+- Declare classes with `class Name {{` and list attributes as bare names (no types/visibility), one per line.
+- Do not invent methods unless explicitly required.
+- Add a blank line between class blocks for readability.
+- Put multiplicities in quotes next to each class on the relation line (e.g., `A "1" -- "0..*" B`).
+- Use `--` for plain associations, `*--` for compositions/whole-part with lifecycle dependency, and `<|--` for inheritance.
+- If a relationship needs its own data or represents many-to-many, introduce an explicit class to hold those attributes.
+
 Output rules:
 - Output ONLY valid PlantUML code.
 - Must include @startuml and @enduml.

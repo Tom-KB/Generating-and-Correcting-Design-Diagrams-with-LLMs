@@ -31,7 +31,7 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 _OPENAI_RPM = int(os.getenv("OPENAI_RPM", "3"))
 _RPM_BUFFER_SEC = float(os.getenv("OPENAI_RPM_BUFFER_SEC", "2.0"))
 _MIN_INTERVAL = (60.0 / max(_OPENAI_RPM, 1)) + max(_RPM_BUFFER_SEC, 0.0)
-_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "1"))
 _LOCK = threading.Lock()
 _last_call_ts = 0.0  # timestamp of last completed API call (this process)
 
@@ -259,6 +259,17 @@ GEN_PROMPT = """\
 You are a UML modeling assistant.
 Generate a UML Class Diagram in PlantUML for the system below.
 
+Follow these conventions derived from the ground-truth diagrams:
+- Use only PlantUML class-diagram syntax (no Markdown or styling directives).
+- Declare classes with `class Name {{` and list attributes as bare names (no types/visibility), one per line.
+- Do not invent methods unless explicitly required.
+- Add a blank line between class blocks for readability.
+- Put multiplicities in quotes next to each class on the relation line (e.g., `A "1" -- "0..*" B`).
+- Use `--` for plain associations, `*--` for compositions/whole-part with lifecycle dependency, and `<|--` for inheritance.
+- If a relationship needs its own data or represents many-to-many, introduce an explicit class to hold those attributes.
+- Never create 2 connections between the same 2 classes; use an association class if needed.
+
+
 Output rules:
 - Output ONLY valid PlantUML code.
 - Must include @startuml and @enduml.
@@ -284,12 +295,22 @@ Sanity-check issues to consider:
 Return a JSON object matching exactly this schema:
 {format_instructions}
 
-Be concrete and actionable."""
+Be conservative, if you think the solution is right, do not suggest changes."""
 
 FIX_PROMPT = """\
 You are a UML fixer.
 Given the requirements, a flawed PlantUML diagram, and the critique issues,
 produce a corrected PlantUML.
+
+Make sure the solution is following these conventions derived from the ground-truth diagrams:
+- Use only PlantUML class-diagram syntax (no Markdown or styling directives).
+- Declare classes with `class Name {{` and list attributes as bare names (no types/visibility), one per line.
+- Do not invent methods unless explicitly required.
+- Add a blank line between class blocks for readability.
+- Put multiplicities in quotes next to each class on the relation line (e.g., `A "1" -- "0..*" B`).
+- Use `--` for plain associations, `*--` for compositions/whole-part with lifecycle dependency, and `<|--` for inheritance.
+- If a relationship needs its own data or represents many-to-many, introduce an explicit class to hold those attributes.
+- Never create 2 connections between the same 2 classes; use an association class if needed.
 
 Rules:
 - Output ONLY valid PlantUML code.
@@ -299,6 +320,7 @@ Rules:
 - Preserve existing correct content, names, and structure as much as possible.
 - Do NOT add new classes/relations unless explicitly required by the requirements.
 - Do NOT remove existing classes/relations unless they are clearly wrong per the requirements.
+- If a critique suggestion conflicts with the stated requirements, ignore that suggestion and keep the original content.
 - If the critique is low-confidence or ambiguous, prefer leaving the original unchanged.
 - If no changes are needed, output the original PlantUML unchanged.
 
@@ -310,6 +332,30 @@ Original PlantUML:
 
 Critique issues:
 {critique}
+"""
+
+SELECT_PROMPT = """\
+You are the final UML selector.
+You are given two candidate PlantUML class diagrams for the same requirements: the initial generation and a fixed version.
+
+Choose which diagram is better with respect to the requirements and conventions. Consider:
+- Correctness against the stated requirements (highest priority).
+- Rendering viability (if one fails to render, choose the one that renders).
+- Alignment with the conventions: attributes as bare names, quoted multiplicities, appropriate connectors, association classes for many-to-many with data, it could never have two relations between the same two classes!
+- If both are equivalent, prefer the fixed diagram only if it improves clarity; otherwise keep the generated one.
+
+Return a JSON object with:
+- choice: "generated" or "fixed"
+- rationale: 1-3 sentences explaining why this choice is better.
+
+Requirements:
+{requirements}
+
+Generated PlantUML:
+{plantuml_generated}
+
+Fixed PlantUML:
+{plantuml_fixed}
 """
 
 EVAL_PROMPT = """\
@@ -356,19 +402,15 @@ class EvalResult(BaseModel):
 class RunResult:
     plantuml_generated: str
     plantuml_fixed: str
-    plantuml_selected: str
     critique: Critique
     evaluation_generated: EvalResult
     evaluation_fixed: EvalResult
-    evaluation_selected: EvalResult
-    selected_source: str
     fix_attempted: bool
     raw_generation: str
     raw_critique: str
     raw_fix: str
     raw_evaluation_generated: str
     raw_evaluation_fixed: str
-    raw_evaluation_selected: str
 
 
 # ---------------- Pipeline Steps ----------------
@@ -421,47 +463,41 @@ def evaluate(requirements: str, plantuml: str) -> Tuple[EvalResult, str]:
     return parser.parse(raw_eval), raw_eval
 
 
+def select_best(
+    requirements: str,
+    plantuml_generated: str,
+    plantuml_fixed: str,
+    render_ok_generated: bool,
+    render_ok_fixed: bool,
+) -> Tuple[str, str]:
+    selector = make_model("selector", temperature=0.0)
+    prompt = ChatPromptTemplate.from_template(SELECT_PROMPT)
+    chain = prompt | selector | StrOutputParser()
+
+    # If only one renders, pick it immediately.
+    if render_ok_generated and not render_ok_fixed:
+        return "generated", "Generated renders; fixed does not."
+    if render_ok_fixed and not render_ok_generated:
+        return "fixed", "Fixed renders; generated does not."
+
+    raw = _invoke_chain(
+        chain,
+        {
+            "requirements": requirements,
+            "plantuml_generated": plantuml_generated,
+            "plantuml_fixed": plantuml_fixed,
+        },
+    )
+    choice_match = re.search(r'"?(generated|fixed)"?', raw, flags=re.IGNORECASE)
+    choice = choice_match.group(1).lower() if choice_match else "generated"
+    return choice, raw
+
+
 def _should_attempt_fix(critique_result: Critique, plantuml: str) -> bool:
     sanity = basic_sanity_checks(plantuml)
     if sanity:
         return True
     return critique_result.score_0_100 < _SKIP_FIX_CRITIC_SCORE_GE
-
-
-def _selection_key(eval_result: EvalResult, render_ok: bool) -> Tuple[int, int, int, int, int]:
-    return (
-        1 if render_ok else 0,
-        1 if eval_result.syntax_ok else 0,
-        1 if eval_result.semantic_ok else 0,
-        1 if eval_result.pragmatic_ok else 0,
-        int(eval_result.score_0_100),
-    )
-
-
-def _select_diagram(
-    *,
-    plantuml_generated: str,
-    eval_generated: EvalResult,
-    render_ok_generated: bool,
-    plantuml_fixed: str,
-    eval_fixed: EvalResult,
-    render_ok_fixed: bool,
-) -> Tuple[str, str, EvalResult]:
-    if render_ok_generated and not render_ok_fixed:
-        return "generated", plantuml_generated, eval_generated
-    if render_ok_fixed and not render_ok_generated:
-        return "fixed", plantuml_fixed, eval_fixed
-
-    if plantuml_fixed.strip() == plantuml_generated.strip():
-        return "generated", plantuml_generated, eval_generated
-
-    key_gen = _selection_key(eval_generated, render_ok_generated)
-    key_fix = _selection_key(eval_fixed, render_ok_fixed)
-    if key_fix > key_gen and (eval_fixed.score_0_100 >= eval_generated.score_0_100 + _MIN_JUDGE_IMPROVEMENT):
-        return "fixed", plantuml_fixed, eval_fixed
-
-    return "generated", plantuml_generated, eval_generated
-
 
 # ---------------- Runner ----------------
 def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
@@ -475,11 +511,11 @@ def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
     else:
         puml_fixed, raw_fix = puml_gen, ""
 
-    eval_generated, raw_eval_gen = evaluate(requirements_text, puml_gen)
-    if puml_fixed.strip() == puml_gen.strip():
-        eval_fixed, raw_eval_fix = eval_generated, raw_eval_gen
-    else:
-        eval_fixed, raw_eval_fix = evaluate(requirements_text, puml_fixed)
+    # eval_generated, raw_eval_gen = evaluate(requirements_text, puml_gen)
+    # if puml_fixed.strip() == puml_gen.strip():
+    #     eval_fixed, raw_eval_fix = eval_generated, raw_eval_gen
+    # else:
+    #     eval_fixed, raw_eval_fix = evaluate(requirements_text, puml_fixed)
 
 
     out_dir = os.path.join(OUTPUTS_ROOT, exercise_id)
@@ -503,45 +539,29 @@ def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
         f.write(ground_truth)
     with open(critique_path, "w", encoding="utf-8") as f:
         f.write(critique_result.model_dump_json(indent=2))
-    with open(eval_gen_path, "w", encoding="utf-8") as f:
-        f.write(eval_generated.model_dump_json(indent=2))
-    with open(eval_fix_path, "w", encoding="utf-8") as f:
-        f.write(eval_fixed.model_dump_json(indent=2))
+    # with open(eval_gen_path, "w", encoding="utf-8") as f:
+    #     f.write(eval_generated.model_dump_json(indent=2))
+    # with open(eval_fix_path, "w", encoding="utf-8") as f:
+    #     f.write(eval_fixed.model_dump_json(indent=2))
 
     gen_render_ok = render_success(gen_puml_path, fmt="png")
     fixed_render_ok = render_success(fixed_puml_path, fmt="png")
+    gt_render_ok = render_success(gt_puml_path, fmt="png")
 
-    selected_source, puml_selected, eval_selected = _select_diagram(
-        plantuml_generated=puml_gen,
-        eval_generated=eval_generated,
-        render_ok_generated=gen_render_ok,
-        plantuml_fixed=puml_fixed,
-        eval_fixed=eval_fixed,
-        render_ok_fixed=fixed_render_ok,
+    selected_source, raw_selection = select_best(
+        requirements_text, puml_gen, puml_fixed, gen_render_ok, fixed_render_ok
     )
+    puml_selected = puml_fixed if selected_source == "fixed" else puml_gen
+    # eval_selected = eval_fixed if selected_source == "fixed" else eval_generated
 
     with open(selected_puml_path, "w", encoding="utf-8") as f:
         f.write(puml_selected)
-    with open(eval_sel_path, "w", encoding="utf-8") as f:
-        f.write(eval_selected.model_dump_json(indent=2))
+    # with open(eval_sel_path, "w", encoding="utf-8") as f:
+    #     f.write(eval_selected.model_dump_json(indent=2))
     with open(selection_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "selected_source": selected_source,
-                "fix_attempted": fix_attempted,
-                "min_judge_improvement": _MIN_JUDGE_IMPROVEMENT,
-                "judge_score_generated_0_100": eval_generated.score_0_100,
-                "judge_score_fixed_0_100": eval_fixed.score_0_100,
-                "judge_score_selected_0_100": eval_selected.score_0_100,
-                "render_ok_generated": gen_render_ok,
-                "render_ok_fixed": fixed_render_ok,
-            },
-            f,
-            indent=2,
-        )
+        json.dump({"choice": selected_source, "raw": raw_selection}, f, indent=2)
 
     selected_render_ok = render_success(selected_puml_path, fmt="png")
-    gt_render_ok = render_success(gt_puml_path, fmt="png")
 
     rq2 = compute_rq2_metrics(puml_selected, ground_truth)
     rq2["render_success_generated"] = 1.0 if gen_render_ok else 0.0
@@ -550,9 +570,10 @@ def run_exercise(exercise_id: str, exercise_path: str) -> Dict[str, float]:
     rq2["render_success_ground_truth"] = 1.0 if gt_render_ok else 0.0
     rq2["exercise_id"] = exercise_id
     rq2["selected_source"] = selected_source
-    rq2["judge_score_0_100"] = float(eval_selected.score_0_100)
-    rq2["judge_score_generated_0_100"] = float(eval_generated.score_0_100)
-    rq2["judge_score_fixed_0_100"] = float(eval_fixed.score_0_100)
+    # rq2["judge_score_0_100"] = float(eval_selected.score_0_100)
+    # rq2["judge_score_generated_0_100"] = float(eval_generated.score_0_100)
+    # rq2["judge_score_fixed_0_100"] = float(eval_fixed.score_0_100)
+    # rq2["judge_score_selected_0_100"] = float(eval_selected.score_0_100)
     rq2["critic_score_0_100"] = float(critique_result.score_0_100)
     rq2["fix_attempted"] = 1.0 if fix_attempted else 0.0
     rq2["min_judge_improvement"] = float(_MIN_JUDGE_IMPROVEMENT)
@@ -580,6 +601,9 @@ def main():
     fieldnames = [
         "exercise_id",
         "judge_score_0_100",
+        "judge_score_generated_0_100",
+        "judge_score_fixed_0_100",
+        "judge_score_selected_0_100",
         "critic_score_0_100",
         "render_success_generated",
         "render_success_fixed",
