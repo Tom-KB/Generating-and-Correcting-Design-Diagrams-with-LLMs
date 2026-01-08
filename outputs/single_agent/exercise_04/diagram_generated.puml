@@ -1,14 +1,15 @@
 @startuml
+
 class Order {
-    +id: int
-    +date: Date
+    id
+    date
 }
 
 class OrderItem {
-    +quantity: int
-    +price: float
+    quantity
+    price
 }
 
-Order "1" -- "*" OrderItem : contains
-OrderItem "1" --> "1" Order : belongs to
+Order "1" -- "0..*" OrderItem
+
 @enduml

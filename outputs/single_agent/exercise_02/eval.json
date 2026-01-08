@@ -3,17 +3,15 @@
   "syntax_issues": [],
   "semantic_ok": false,
   "semantic_issues": [
-    "The Enrollment class is not associated with the Student and Course classes in a way that reflects the many-to-many relationship. It should have associations to both Student and Course.",
-    "The Enrollment class should include associations to Student and Course to represent the enrollment relationship."
+    "The Enrollment class is not associated with the Student and Course classes in a way that indicates it is a many-to-many relationship.",
+    "The Enrollment class should have associations to both Student and Course to represent the enrollment relationship explicitly."
   ],
-  "pragmatic_ok": false,
-  "pragmatic_issues": [
-    "The diagram lacks clarity in representing the relationships between Student, Course, and Enrollment. It is not immediately clear how Enrollment connects to both entities."
-  ],
-  "score_0_100": 40,
+  "pragmatic_ok": true,
+  "pragmatic_issues": [],
+  "score_0_100": 60,
   "recommendations": [
-    "Add associations from the Enrollment class to both the Student and Course classes to clearly represent the many-to-many relationship.",
-    "Consider renaming the associations to be more descriptive, such as 'enrolls' from Student to Enrollment and 'includes' from Course to Enrollment.",
-    "Include multiplicity on the associations from Enrollment to Student and Course to indicate that each Enrollment is linked to one Student and one Course."
+    "Add associations from the Enrollment class to both the Student and Course classes to clarify the many-to-many relationship.",
+    "Consider adding visibility modifiers (e.g., + for public) to the attributes in the classes for better clarity.",
+    "Include the data types for the attributes in the classes to enhance understanding of the model."
   ]
 }

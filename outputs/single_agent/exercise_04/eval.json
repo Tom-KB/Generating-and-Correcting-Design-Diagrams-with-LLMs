@@ -1,13 +1,17 @@
 {
   "syntax_ok": true,
   "syntax_issues": [],
-  "semantic_ok": true,
-  "semantic_issues": [],
+  "semantic_ok": false,
+  "semantic_issues": [
+    "The Order class does not specify the data types for id and date.",
+    "The OrderItem class does not specify the data types for quantity and price.",
+    "The relationship between Order and OrderItem does not enforce the constraint that an OrderItem cannot exist without its Order."
+  ],
   "pragmatic_ok": true,
   "pragmatic_issues": [],
-  "score_0_100": 95,
+  "score_0_100": 60,
   "recommendations": [
-    "Consider adding method signatures to the classes to enhance clarity on the functionality of the Order and OrderItem classes.",
-    "Include visibility modifiers for the attributes (e.g., private, protected) to better encapsulate the data."
+    "Specify the data types for the attributes in both the Order and OrderItem classes (e.g., id: Integer, date: Date, quantity: Integer, price: Float).",
+    "Use a composition relationship (filled diamond) instead of an association to indicate that OrderItems cannot exist without an Order."
   ]
 }

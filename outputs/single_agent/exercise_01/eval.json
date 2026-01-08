@@ -5,6 +5,9 @@
   "semantic_issues": [],
   "pragmatic_ok": true,
   "pragmatic_issues": [],
-  "score_0_100": 100,
-  "recommendations": []
+  "score_0_100": 90,
+  "recommendations": [
+    "Consider adding visibility modifiers (e.g., + for public) to class attributes for clarity.",
+    "Include data types for class attributes to enhance understanding of the model."
+  ]
 }

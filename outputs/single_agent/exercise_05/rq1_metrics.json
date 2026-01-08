@@ -5,7 +5,7 @@
   "relation_precision": 0.3333333333333333,
   "relation_recall": 0.3333333333333333,
   "relation_f1": 0.3333333333333333,
-  "multiplicity_accuracy": 0.0,
+  "multiplicity_accuracy": 0.3333333333333333,
   "n_classes_gen": 4.0,
   "n_classes_gt": 4.0,
   "n_relations_gen": 3.0,
@@ -14,5 +14,5 @@
   "render_success_generated": 1.0,
   "render_success_ground_truth": 1.0,
   "exercise_id": "exercise_05",
-  "judge_score_0_100": 40.0
+  "judge_score_0_100": 60.0
 }
