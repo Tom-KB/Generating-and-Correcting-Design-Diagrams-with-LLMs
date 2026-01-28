@@ -1,0 +1,23 @@
+# SOFTWARE_DESCRIPTION
+The system manages orders and order items.
+
+Each Order has an id and a date.
+Each OrderItem has a quantity and a price.
+
+An Order consists of multiple OrderItems.
+An OrderItem cannot exist without its Order.
+
+# GROUND_TRUTH_PLANTUML
+@startuml
+class Order {
+  id
+  date
+}
+
+class OrderItem {
+  quantity
+  price
+}
+
+Order "1" *-- "1..*" OrderItem
+@enduml

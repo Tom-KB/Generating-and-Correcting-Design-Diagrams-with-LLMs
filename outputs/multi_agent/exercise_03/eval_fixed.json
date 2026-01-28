@@ -1,0 +1,20 @@
+{
+  "syntax_ok": true,
+  "syntax_issues": [],
+  "semantic_ok": false,
+  "semantic_issues": [
+    "The Employee class incorrectly includes 'bonus' and 'programmingLanguage' attributes, which should be specific to Manager and Developer respectively.",
+    "The Manager and Developer classes do not have any attributes defined, which is necessary to meet the requirements."
+  ],
+  "pragmatic_ok": false,
+  "pragmatic_issues": [
+    "The diagram lacks clarity in distinguishing attributes specific to Manager and Developer.",
+    "The diagram does not follow the principle of encapsulation, as it exposes attributes that should be private or protected."
+  ],
+  "score_0_100": 30,
+  "recommendations": [
+    "Remove 'bonus' and 'programmingLanguage' from the Employee class and define them as attributes in the Manager and Developer classes respectively.",
+    "Define the attributes in the Manager and Developer classes explicitly to improve clarity.",
+    "Consider making the attributes private and providing public getters/setters to adhere to encapsulation principles."
+  ]
+}

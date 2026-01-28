@@ -1,0 +1,27 @@
+@startuml
+
+class Library {
+  name
+  address
+}
+
+class Book {
+  ISBN
+  title
+}
+
+class User {
+  id
+  name
+}
+
+class Borrowing {
+  borrowDate
+}
+
+Library "1" *-- "0..*" Book
+
+User "1" -- "0..*" Borrowing
+Borrowing "1" -- "0..1" Book
+
+@enduml

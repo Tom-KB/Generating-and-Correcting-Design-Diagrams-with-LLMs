@@ -1,0 +1,15 @@
+@startuml
+
+class Order {
+  id
+  date
+}
+
+class OrderItem {
+  quantity
+  price
+}
+
+Order "1" *-- "1..*" OrderItem
+
+@enduml

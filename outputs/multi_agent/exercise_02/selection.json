@@ -1,0 +1,4 @@
+{
+  "choice": "generated",
+  "raw": "```json\n{\n  \"choice\": \"generated\",\n  \"rationale\": \"Both diagrams are identical and correctly model the requirements. They use an association class (`Enrollment`) to capture the many-to-many relationship between `Student` and `Course` and store the `enrollmentDate`. Since the fixed diagram offers no improvements in clarity or correctness over the generated one, the generated version is chosen as per the instructions.\"\n}\n```"
+}

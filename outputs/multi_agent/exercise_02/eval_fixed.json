@@ -1,0 +1,17 @@
+{
+  "syntax_ok": true,
+  "syntax_issues": [],
+  "semantic_ok": true,
+  "semantic_issues": [],
+  "pragmatic_ok": false,
+  "pragmatic_issues": [
+    "The class names and attributes should be more explicitly defined with types (e.g., id: int, name: string).",
+    "The relationships between classes could be labeled for clarity, indicating the nature of the associations."
+  ],
+  "score_0_100": 75,
+  "recommendations": [
+    "Define the types of attributes in the Student and Course classes for better clarity.",
+    "Add labels to the associations to indicate the nature of the relationships (e.g., 'enrolls', 'contains').",
+    "Consider adding multiplicity to the Enrollment class to clarify its relationship with Student and Course."
+  ]
+}

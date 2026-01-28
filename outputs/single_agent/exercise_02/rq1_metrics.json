@@ -1,0 +1,18 @@
+{
+  "class_precision": 1.0,
+  "class_recall": 1.0,
+  "class_f1": 1.0,
+  "relation_precision": 1.0,
+  "relation_recall": 1.0,
+  "relation_f1": 1.0,
+  "multiplicity_accuracy": 0.0,
+  "n_classes_gen": 3.0,
+  "n_classes_gt": 3.0,
+  "n_relations_gen": 2.0,
+  "n_relations_gt": 2.0,
+  "n_multiplicities_gt": 2.0,
+  "render_success_generated": 1.0,
+  "render_success_ground_truth": 1.0,
+  "exercise_id": "exercise_02",
+  "judge_score_0_100": 60.0
+}
