@@ -1,53 +1,30 @@
-# *ACL Paper Styles
+# LLM Agentic UML Diagram Generator & Corrector
 
-This directory contains the latest LaTeX and Word templates for *ACL
-conferences.
+This project evaluates the performance of Large Language Models in generating **PlantUML Class Diagrams** from textual requirements, it compares a **Single-Agent Baseline** against a **Multi-Agent**.
 
-## Instructions for authors
+## Features
 
-Paper submissions to *ACL conferences must use the official ACL style
-templates.
+* **Single Agent:** Direct generation of PlantUML code from text.
+* **Multi-Agent Pipeline:** Add self-correction steps:
+* **Generator:** Creates initial diagram.
+* **Critic:** Reviews syntax and requirements.
+* **Fixer:** Corrects the diagram based on the Critique feedback.
+* **Selector:** Chooses the best version (Initial vs Fixed).
 
-The LaTeX style files are available
+* **Automated Metrics:** Calculates Precision, Recall, and F1-Score for classes, relations, and multiplicities compared to a Ground Truth.
 
-- as an [Overleaf template](https://www.overleaf.com/latex/templates/association-for-computational-linguistics-acl-conference/jvxskxpnznfj)
-- in this repository, in the [`latex`](https://github.com/acl-org/acl-style-files/blob/master/latex) subdirectory
-- as a [.zip file](https://github.com/acl-org/acl-style-files/archive/refs/heads/master.zip)
+## Usage
 
-Please see [`latex/acl_latex.tex`](https://github.com/acl-org/acl-style-files/blob/master/latex/acl_latex.tex) for an example.
+Configure your `.env` file with the desired model (default: `gpt-4o-mini`) and your API key.
 
-The Microsoft Word template is available in this repository at [`word/acl.docx`](https://github.com/acl-org/acl-style-files/blob/master/word/acl.docx).
+### Run Single Agent Baseline
+```bash
+python src/single_agent/baseline_single_agent.py
+```
 
-Please follow the paper formatting guidelines general to *ACL
-conferences:
+### Run Multi-Agent Pipeline
+```bash
+python src/multi_agent/multi_agent.py
+```
 
-- [Paper formatting guidelines](https://acl-org.github.io/ACLPUB/formatting.html)
-
-Authors may not modify these style files or use templates designed for
-other conferences.
-
-## Instructions for publications chairs
-
-To adapt the style files for your conference, please fork this repository and
-make necessary changes. Minimally, you'll need to update the name of
-the conference and rename the files.
-
-If you make improvements to the templates that should be propagated to
-future conferences, please submit a pull request. Thank you in
-advance!
-
-In older versions of the templates, authors were asked to fill in the
-START submission ID so that it would be stamped at the top of each
-page of the anonymized version. This is no longer needed, because it
-is now possible to do this stamping automatically within
-START. Currently, the way to do this is for the program chair to email
-support@softconf.com and request it.
-
-## Instructions for making changes to style files
-
-- merge pull request in github, or push to github
-- git pull from github to a local repository
-- then, git push from your local repository to overleaf project 
-    - Overleaf project is https://www.overleaf.com/project/5f64f1fb97c4c50001b60549
-    - Overleaf git url is https://git.overleaf.com/5f64f1fb97c4c50001b60549
-- then, click "Submit" and then "Sumbit as Template" in overleaf in order to ask overleaf to update the overleaf template from the overleaf project 
+Results will be saved in the `outputs/` folder for the selected architecture.
