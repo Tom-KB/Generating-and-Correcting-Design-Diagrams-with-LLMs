@@ -6,10 +6,10 @@ This project evaluates the performance of Large Language Models in generating **
 
 * **Single Agent:** Direct generation of PlantUML code from text.
 * **Multi-Agent Pipeline:** Add self-correction steps:
-* **Generator:** Creates initial diagram.
-* **Critic:** Reviews syntax and requirements.
-* **Fixer:** Corrects the diagram based on the Critique feedback.
-* **Selector:** Chooses the best version (Initial vs Fixed).
+    * **Generator:** Creates initial diagram.
+    * **Critic:** Reviews syntax and requirements.
+    * **Fixer:** Corrects the diagram based on the Critique feedback.
+    * **Selector:** Chooses the best version (Initial vs Fixed).
 
 * **Automated Metrics:** Calculates Precision, Recall, and F1-Score for classes, relations, and multiplicities compared to a Ground Truth.
 
