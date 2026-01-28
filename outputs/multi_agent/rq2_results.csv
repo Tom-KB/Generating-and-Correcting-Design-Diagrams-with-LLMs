@@ -1,0 +1,6 @@
+exercise_id,judge_score_0_100,judge_score_generated_0_100,judge_score_fixed_0_100,judge_score_selected_0_100,critic_score_0_100,render_success_generated,render_success_fixed,render_success_selected,render_success_ground_truth,selected_source,class_precision,class_recall,class_f1,relation_precision,relation_recall,relation_f1,multiplicity_accuracy,n_classes_gen,n_classes_gt,n_relations_gen,n_relations_gt,n_multiplicities_gt
+exercise_01,,,,,100.0,1.0,1.0,1.0,1.0,generated,1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.0,2.0,1.0,1.0,1.0
+exercise_02,,,,,100.0,1.0,1.0,1.0,1.0,generated,1.0,1.0,1.0,1.0,1.0,1.0,1.0,3.0,3.0,2.0,2.0,2.0
+exercise_03,,,,,100.0,1.0,1.0,1.0,1.0,generated,1.0,1.0,1.0,1.0,1.0,1.0,0.0,3.0,3.0,2.0,2.0,0.0
+exercise_04,,,,,100.0,1.0,1.0,1.0,1.0,generated,1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.0,2.0,1.0,1.0,1.0
+exercise_05,,,,,100.0,1.0,1.0,1.0,1.0,generated,1.0,1.0,1.0,0.6666666666666666,0.6666666666666666,0.6666666666666666,0.6666666666666666,4.0,4.0,3.0,3.0,3.0

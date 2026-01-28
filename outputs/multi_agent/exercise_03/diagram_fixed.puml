@@ -1,0 +1,20 @@
+@startuml
+
+class Employee {
+  id
+  name
+}
+
+class Manager {
+  bonus
+}
+
+class Developer {
+  programmingLanguage
+}
+
+Employee <|-- Manager
+
+Employee <|-- Developer
+
+@enduml

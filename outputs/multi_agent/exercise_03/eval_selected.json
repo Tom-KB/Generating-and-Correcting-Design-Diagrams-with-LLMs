@@ -1,0 +1,17 @@
+{
+  "syntax_ok": true,
+  "syntax_issues": [],
+  "semantic_ok": false,
+  "semantic_issues": [
+    "The Employee class does not specify the types of attributes (id and name) which should be defined as integers and strings respectively.",
+    "The Manager and Developer classes do not inherit the attributes from the Employee class, which is necessary to represent the full structure of an employee."
+  ],
+  "pragmatic_ok": true,
+  "pragmatic_issues": [],
+  "score_0_100": 60,
+  "recommendations": [
+    "Define the types of attributes in the Employee class (e.g., id: int, name: string).",
+    "Ensure that Manager and Developer classes inherit the attributes from the Employee class to maintain a complete representation of an employee.",
+    "Consider adding visibility modifiers (e.g., + for public) to the attributes for better clarity."
+  ]
+}

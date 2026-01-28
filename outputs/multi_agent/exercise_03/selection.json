@@ -1,0 +1,4 @@
+{
+  "choice": "generated",
+  "raw": "```json\n{\n  \"choice\": \"generated\",\n  \"rationale\": \"Both diagrams are identical and correctly represent all requirements and conventions. According to the tie-breaking rule, if both are equivalent and the fixed version does not improve clarity, the generated one should be preferred.\"\n}\n```"
+}

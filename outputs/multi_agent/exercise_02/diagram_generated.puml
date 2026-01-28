@@ -1,0 +1,20 @@
+@startuml
+
+class Student {
+    id
+    name
+}
+
+class Course {
+    code
+    title
+}
+
+class Enrollment {
+    enrollmentDate
+}
+
+Student "1" -- "0..*" Enrollment
+Course "1" -- "0..*" Enrollment
+
+@enduml

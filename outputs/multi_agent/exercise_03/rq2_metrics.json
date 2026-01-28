@@ -1,0 +1,23 @@
+{
+  "class_precision": 1.0,
+  "class_recall": 1.0,
+  "class_f1": 1.0,
+  "relation_precision": 1.0,
+  "relation_recall": 1.0,
+  "relation_f1": 1.0,
+  "multiplicity_accuracy": 0.0,
+  "n_classes_gen": 3.0,
+  "n_classes_gt": 3.0,
+  "n_relations_gen": 2.0,
+  "n_relations_gt": 2.0,
+  "n_multiplicities_gt": 0.0,
+  "render_success_generated": 1.0,
+  "render_success_fixed": 1.0,
+  "render_success_selected": 1.0,
+  "render_success_ground_truth": 1.0,
+  "exercise_id": "exercise_03",
+  "selected_source": "generated",
+  "critic_score_0_100": 100.0,
+  "fix_attempted": 0.0,
+  "min_judge_improvement": 1.0
+}

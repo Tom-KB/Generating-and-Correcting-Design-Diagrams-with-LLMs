@@ -1,0 +1,16 @@
+{
+  "syntax_ok": true,
+  "syntax_issues": [],
+  "semantic_ok": false,
+  "semantic_issues": [
+    "The Enrollment class is not associated with the Student and Course classes in a way that reflects the enrollment relationship.",
+    "The Enrollment class should have associations with both Student and Course to represent the many-to-many relationship correctly."
+  ],
+  "pragmatic_ok": true,
+  "pragmatic_issues": [],
+  "score_0_100": 60,
+  "recommendations": [
+    "Add associations from the Enrollment class to both Student and Course classes to represent the enrollment relationship.",
+    "Consider making the attributes of the classes private and providing public getters and setters for better encapsulation."
+  ]
+}
